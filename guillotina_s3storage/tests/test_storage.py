@@ -3,6 +3,7 @@ from guillotina.exceptions import UnRetryableRequestError
 from guillotina.files import FileManager
 from guillotina.files import MAX_REQUEST_CACHE_SIZE
 from guillotina.files.adapter import DBDataManager
+from guillotina.files.utils import generate_key
 from guillotina.tests.utils import create_content
 from guillotina.tests.utils import login
 from guillotina_s3storage.interfaces import IS3BlobStore
@@ -309,9 +310,9 @@ async def test_multipart_upload_with_tus_and_tid_conflict(dummy_request):
     await mng.tus_patch()
 
     # do this chunk over again...
-    ob.file._current_upload -= len(chunk)
-    ob.file._block -= 1
-    ob.file._multipart['Parts'] = ob.file._multipart['Parts'][:-1]
+    ob.__uploads__['file']['offset'] -= len(chunk)
+    ob.__uploads__['file']['_block'] -= 1
+    ob.__uploads__['file']['_multipart']['Parts'] = ob.__uploads__['file']['_multipart']['Parts'][:-1]  # noqa
     request._payload = FakeContentReader(chunk)
     request._cache_data = b''
     request._last_read_pos = 0
@@ -345,7 +346,7 @@ def test_gen_key(dummy_request):
     request._container_id = 'test-container'
     ob = create_content()
     fi = S3File()
-    key = fi.generate_key(request, ob)
+    key = generate_key(request, ob)
     assert key.startswith('test-container/')
     last = key.split('/')[-1]
     assert '::' in last

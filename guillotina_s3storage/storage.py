@@ -163,7 +163,6 @@ class S3FileStorageManager(object):
                 _multipart=multipart,
                 _block=dm.get('_block') + 1
             )
-            return part
         return size
 
     @aretriable(3)
