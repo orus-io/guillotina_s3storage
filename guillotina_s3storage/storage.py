@@ -16,11 +16,12 @@ from guillotina_s3storage.events import InitialS3Upload
 from guillotina_s3storage.interfaces import IS3BlobStore
 from guillotina_s3storage.interfaces import IS3File
 from guillotina_s3storage.interfaces import IS3FileField
-from guillotina_s3storage.utils import aretriable
 from zope.interface import implementer
 
 import aiobotocore
+import aiohttp
 import asyncio
+import backoff
 import boto3
 import botocore
 import logging
@@ -33,6 +34,12 @@ MAX_SIZE = 1073741824
 MIN_UPLOAD_SIZE = 5 * 1024 * 1024
 CHUNK_SIZE = MIN_UPLOAD_SIZE
 MAX_RETRIES = 5
+
+RETRIABLE_EXCEPTIONS = [
+    botocore.exceptions.ClientError,
+    aiohttp.client_exceptions.ClientPayloadError,
+    botocore.exceptions.BotoCoreError
+]
 
 
 class IS3FileStorageManager(IFileStorageManager):
@@ -73,16 +80,16 @@ class S3FileStorageManager(object):
         self.request = request
         self.field = field
 
-    @aretriable(3)
+    @backoff.on_exception(backoff.expo, RETRIABLE_EXCEPTIONS, max_tries=3)
     async def _download(self, file):
         util = get_utility(IS3BlobStore)
-        if file is None or file.uri is None:
-            raise FileNotFoundException('File not found')
         return await util._s3aioclient.get_object(
             Bucket=file._bucket_name, Key=file.uri)
 
     async def iter_data(self):
         file = self.field.get(self.field.context or self.context)
+        if file is None or file.uri is None:
+            raise FileNotFoundException('File not found')
         downloader = await self._download(file)
 
         async with downloader['Body'] as stream:
@@ -93,7 +100,6 @@ class S3FileStorageManager(object):
                 yield data
                 data = await stream.read(CHUNK_SIZE)
 
-    @aretriable(3)
     async def _abort_multipart(self, dm):
         util = get_utility(IS3BlobStore)
         try:
@@ -129,7 +135,7 @@ class S3FileStorageManager(object):
         await self._create_multipart(dm)
         await notify(InitialS3Upload(self.context))
 
-    @aretriable(3)
+    @backoff.on_exception(backoff.expo, RETRIABLE_EXCEPTIONS, max_tries=3)
     async def _create_multipart(self, dm):
         util = get_utility(IS3BlobStore)
         await dm.update(
@@ -165,7 +171,7 @@ class S3FileStorageManager(object):
             )
         return size
 
-    @aretriable(3)
+    @backoff.on_exception(backoff.expo, RETRIABLE_EXCEPTIONS, max_tries=3)
     async def _upload_part(self, dm, data):
         util = get_utility(IS3BlobStore)
         return await util._s3aioclient.upload_part(
@@ -198,7 +204,7 @@ class S3FileStorageManager(object):
         )
         await notify(FinishS3Upload(self.context))
 
-    @aretriable(3)
+    @backoff.on_exception(backoff.expo, RETRIABLE_EXCEPTIONS, max_tries=3)
     async def _complete_multipart_upload(self, dm):
         util = get_utility(IS3BlobStore)
         await util._s3aioclient.complete_multipart_upload(

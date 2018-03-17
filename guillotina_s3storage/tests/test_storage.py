@@ -8,7 +8,6 @@ from guillotina.tests.utils import create_content
 from guillotina.tests.utils import login
 from guillotina_s3storage.interfaces import IS3BlobStore
 from guillotina_s3storage.storage import CHUNK_SIZE
-from guillotina_s3storage.storage import S3File
 from guillotina_s3storage.storage import S3FileField
 from guillotina_s3storage.storage import S3FileStorageManager
 from hashlib import md5
@@ -345,7 +344,6 @@ def test_gen_key(dummy_request):
     request = dummy_request  # noqa
     request._container_id = 'test-container'
     ob = create_content()
-    fi = S3File()
     key = generate_key(request, ob)
     assert key.startswith('test-container/')
     last = key.split('/')[-1]

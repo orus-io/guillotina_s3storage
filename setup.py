@@ -29,7 +29,8 @@ setup(
         'aiohttp<2.4.0',
         'boto3',
         'ujson',
-        'aiobotocore'
+        'aiobotocore',
+        'backoff'
     ],
     tests_require=[
         'pytest',
