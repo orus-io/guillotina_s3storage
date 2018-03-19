@@ -102,6 +102,18 @@ class S3FileStorageManager:
                 yield data
                 data = await stream.read(CHUNK_SIZE)
 
+    async def delete_upload(self, uri, bucket=None):
+        util = get_utility(IS3BlobStore)
+        if bucket is None:
+            bucket = await util.get_bucket_name()
+        if uri is not None:
+            try:
+                await util._s3aioclient.delete_object(Bucket=bucket, Key=uri)
+            except botocore.exceptions.ClientError as e:
+                log.warn('Error deleting object', exc_info=True)
+        else:
+            raise AttributeError('No valid uri')
+
     async def _abort_multipart(self, dm):
         util = get_utility(IS3BlobStore)
         try:
@@ -172,14 +184,12 @@ class S3FileStorageManager:
             Body=data)
 
     async def finish(self, dm):
-        util = get_utility(IS3BlobStore)
         file = self.field.get(self.field.context or self.context)
         if file is not None and file.uri is not None:
             # delete existing file
             if self.should_clean(file):
                 try:
-                    await util._s3aioclient.delete_object(
-                        Bucket=file._bucket_name, Key=file.uri)
+                    await self.delete_upload(file.uri, file._bucket_name)
                 except botocore.exceptions.ClientError as e:
                     log.error(f'Referenced key {file.uri} could not be found', exc_info=True)
                     log.warn('Error deleting object', exc_info=True)
