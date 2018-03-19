@@ -2,17 +2,15 @@
 from aiohttp.web_exceptions import HTTPNotFound
 from guillotina import configure
 from guillotina.component import get_utility
-from guillotina.event import notify
 from guillotina.exceptions import FileNotFoundException
 from guillotina.files import BaseCloudFile
 from guillotina.files.utils import generate_key
+from guillotina.interfaces import IFileCleanup
 from guillotina.interfaces import IFileStorageManager
 from guillotina.interfaces import IRequest
 from guillotina.interfaces import IResource
 from guillotina.schema import Object
 from guillotina.utils import get_current_request
-from guillotina_s3storage.events import FinishS3Upload
-from guillotina_s3storage.events import InitialS3Upload
 from guillotina_s3storage.interfaces import IS3BlobStore
 from guillotina_s3storage.interfaces import IS3File
 from guillotina_s3storage.interfaces import IS3FileField
@@ -71,7 +69,7 @@ class S3FileField(Object):
 @configure.adapter(
     for_=(IResource, IRequest, IS3FileField),
     provides=IS3FileStorageManager)
-class S3FileStorageManager(object):
+class S3FileStorageManager:
 
     file_class = S3File
 
@@ -79,6 +77,10 @@ class S3FileStorageManager(object):
         self.context = context
         self.request = request
         self.field = field
+
+    def should_clean(self, file):
+        cleanup = IFileCleanup(self.context, None)
+        return cleanup is None or cleanup.should_clean(file=file, field=self.field)
 
     @backoff.on_exception(backoff.expo, RETRIABLE_EXCEPTIONS, max_tries=3)
     async def _download(self, file):
@@ -133,7 +135,6 @@ class S3FileStorageManager(object):
             _block=1
         )
         await self._create_multipart(dm)
-        await notify(InitialS3Upload(self.context))
 
     @backoff.on_exception(backoff.expo, RETRIABLE_EXCEPTIONS, max_tries=3)
     async def _create_multipart(self, dm):
@@ -143,17 +144,6 @@ class S3FileStorageManager(object):
                 Bucket=dm.get('_bucket_name'),
                 Key=dm.get('_upload_file_id'))
         )
-
-    async def delete_upload(self, uri):
-        util = get_utility(IS3BlobStore)
-        if uri is not None:
-            try:
-                await util._s3aioclient.delete_object(
-                    Bucket=await util.get_bucket_name(), Key=uri)
-            except botocore.exceptions.ClientError as e:
-                log.warn('Error deleting object', exc_info=True)
-        else:
-            raise AttributeError('No valid uri')
 
     async def append(self, dm, iterable, offset) -> int:
         size = 0
@@ -186,12 +176,13 @@ class S3FileStorageManager(object):
         file = self.field.get(self.field.context or self.context)
         if file is not None and file.uri is not None:
             # delete existing file
-            try:
-                await util._s3aioclient.delete_object(
-                    Bucket=file._bucket_name, Key=file.uri)
-            except botocore.exceptions.ClientError as e:
-                log.error(f'Referenced key {file.uri} could not be found', exc_info=True)
-                log.warn('Error deleting object', exc_info=True)
+            if self.should_clean(file):
+                try:
+                    await util._s3aioclient.delete_object(
+                        Bucket=file._bucket_name, Key=file.uri)
+                except botocore.exceptions.ClientError as e:
+                    log.error(f'Referenced key {file.uri} could not be found', exc_info=True)
+                    log.warn('Error deleting object', exc_info=True)
 
         if dm.get('_mpu') is not None:
             await self._complete_multipart_upload(dm)
@@ -202,7 +193,6 @@ class S3FileStorageManager(object):
             _block=None,
             _upload_file_id=None
         )
-        await notify(FinishS3Upload(self.context))
 
     @backoff.on_exception(backoff.expo, RETRIABLE_EXCEPTIONS, max_tries=3)
     async def _complete_multipart_upload(self, dm):
@@ -237,7 +227,7 @@ class S3FileStorageManager(object):
         )
 
 
-class S3BlobStore(object):
+class S3BlobStore:
 
     def __init__(self, settings, loop=None):
         self._aws_access_key = settings['aws_client_id']
